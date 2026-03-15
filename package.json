@@ -1,0 +1,31 @@
+{
+  "name": "claudcraft-bedrock",
+  "version": "0.1.0",
+  "description": "AI-controlled Minecraft Bedrock bot powered by Claude",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jog002/ClaudCraft_Bedrock.git"
+  },
+  "keywords": [
+    "minecraft",
+    "bedrock",
+    "bot",
+    "ai",
+    "claude"
+  ],
+  "author": "Oscar",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@types/node": "^25.5.0",
+    "bedrock-protocol": "^3.53.0",
+    "dotenv": "^17.3.1",
+    "typescript": "^5.9.3"
+  }
+}
