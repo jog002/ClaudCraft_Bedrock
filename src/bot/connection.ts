@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { createClient, Client, ClientOptions } from 'bedrock-protocol';
 import { Config } from '../config';
+import { SessionFinder } from './sessionFinder';
 
 interface TextPacket {
   type: string;
@@ -24,6 +25,7 @@ export class BotConnection extends EventEmitter {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 5000;
+  private connectedUsername = '';
 
   constructor(config: Config) {
     super();
@@ -31,16 +33,57 @@ export class BotConnection extends EventEmitter {
   }
 
   async connect(): Promise<void> {
-    const username = this.config.bot.microsoftEmail || this.config.bot.name;
+    // Clean up any existing connection to avoid server_id_conflict
+    if (this.client) {
+      try { this.client.close(); } catch {}
+      this.client = null;
+    }
+
+    // Use bot name for offline/BDS connections, email only for authenticated connections
+    const username = this.config.connection.offline
+      ? this.config.bot.name
+      : (this.config.bot.microsoftEmail || this.config.bot.name);
+    this.connectedUsername = username;
 
     const options: ClientOptions = {
-      host: this.config.connection.host,
-      port: this.config.connection.port,
+      host: process.env.BDS_HOST || this.config.connection.host,
+      port: parseInt(process.env.BDS_PORT || '') || this.config.connection.port,
       username,
       offline: this.config.connection.offline,
       profilesFolder: this.config.bot.authCachePath,
-      raknetBackend: 'jsp-raknet',
-    };
+      raknetBackend: process.env.RAKNET_BACKEND || 'jsp-raknet',
+      skipPing: true, // Skip initial server ping — avoids "Ping timed out" on mobile/LAN
+      connectTimeout: 15000,
+      version: '1.26.0', // Force protocol version compatible with bedrock-protocol
+      viewDistance: 4, // Low render distance — enough for local awareness, expanded by deepScan
+    } as any;
+
+    // Friend's world connection — discover via Xbox Live session
+    if (this.config.connection.type === 'friend') {
+      const sessionFinder = new SessionFinder(this.config);
+      await sessionFinder.authenticate();
+
+      const friendTag = this.config.connection.friendGamertag;
+      console.log(`[Connection] Searching for ${friendTag ? `"${friendTag}"'s` : "any friend's"} Minecraft world...`);
+
+      const worlds = await sessionFinder.findFriendWorlds(friendTag || undefined);
+
+      if (worlds.length === 0) {
+        throw new Error(
+          friendTag
+            ? `Could not find an active Minecraft session for "${friendTag}". Make sure they have a world open and the bot account is on their friends list.`
+            : 'No friends are hosting a joinable Minecraft world right now.'
+        );
+      }
+
+      const world = worlds[0];
+      console.log(`[Connection] Found world: "${world.worldName}" hosted by ${world.hostGamertag} (${world.ip}:${world.port})`);
+      console.log(`[Connection] Players: ${world.memberCount}/${world.maxMemberCount}, Version: ${world.version}`);
+
+      options.host = world.ip;
+      options.port = world.port;
+      options.offline = false;
+    }
 
     // Realm connection
     if (this.config.connection.type === 'realm' && this.config.connection.realmName) {
@@ -62,6 +105,7 @@ export class BotConnection extends EventEmitter {
     this.client.on('join', () => {
       console.log('[Connection] Authenticated and joined server.');
       this.reconnectAttempts = 0;
+      this.emit('join');
     });
 
     this.client.on('spawn', () => {
@@ -71,7 +115,8 @@ export class BotConnection extends EventEmitter {
 
     this.client.on('text', (packet: TextPacket) => {
       // Filter out system messages and own messages
-      if (packet.type === 'chat' && packet.source_name && packet.source_name !== this.getBotName()) {
+      const isOwnMessage = packet.source_name === this.getBotName() || packet.source_name === this.connectedUsername;
+      if (packet.type === 'chat' && packet.source_name && !isOwnMessage) {
         this.emit('chat', {
           username: packet.source_name,
           message: packet.message,
@@ -89,7 +134,7 @@ export class BotConnection extends EventEmitter {
     this.client.on('kick', (reason: any) => {
       console.log(`[Connection] Kicked from server:`, reason);
       this.emit('kicked', reason);
-      this.handleDisconnect();
+      // close event will also fire — let it handle reconnect
     });
 
     this.client.on('close', () => {
@@ -113,20 +158,47 @@ export class BotConnection extends EventEmitter {
     // Minecraft chat limit is ~256 chars; split if needed
     const chunks = this.splitMessage(message, 200);
     for (const chunk of chunks) {
+      // Include all fields required by the protocol schema to avoid bad_packet
       this.client.queue('text', {
-        type: 'chat',
         needs_translation: false,
+        category: 'authored',
+        type: 'chat',
         source_name: this.getBotName(),
+        message: chunk,
         xuid: '',
         platform_chat_id: '',
-        filtered_message: '',
-        message: chunk,
+        has_filtered_message: false,
       });
     }
   }
 
+  sendCommand(command: string): void {
+    if (!this.client) {
+      console.error('[Connection] Cannot send command: not connected.');
+      return;
+    }
+
+    const cmd = command.startsWith('/') ? command.slice(1) : command;
+
+    this.client.queue('command_request', {
+      command: cmd,
+      origin: {
+        type: 'player',
+        uuid: '00000000-0000-0000-0000-000000000000',
+        request_id: `cc-${Date.now()}`,
+        player_entity_id: BigInt(0),
+      },
+      internal: false,
+      version: '1',
+    });
+  }
+
   getBotName(): string {
     return this.config.bot.name;
+  }
+
+  getClient(): Client | null {
+    return this.client;
   }
 
   disconnect(): void {

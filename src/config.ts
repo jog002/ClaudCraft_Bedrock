@@ -6,14 +6,18 @@ export interface BotConfig {
   persona: string;
   authCachePath: string;
   microsoftEmail: string;
+  memoryPath: string;
 }
 
 export interface ConnectionConfig {
-  type: 'realm' | 'server';
+  type: 'realm' | 'server' | 'friend';
   realmName: string;
+  friendGamertag: string;
+  friendMicrosoftEmail: string;
   host: string;
   port: number;
   offline: boolean;
+  cheats: boolean;
 }
 
 export interface LLMConfig {
@@ -35,13 +39,17 @@ const DEFAULT_CONFIG: Config = {
     persona: 'friendly and curious Minecraft bot who loves exploring and helping out',
     authCachePath: './auth_cache',
     microsoftEmail: '',
+    memoryPath: './memory/bot_memory.json',
   },
   connection: {
     type: 'server',
     realmName: '',
+    friendGamertag: '',
+    friendMicrosoftEmail: '',
     host: 'localhost',
     port: 19132,
     offline: true,
+    cheats: true,
   },
   llm: {
     chatModel: 'claude-haiku-4-5-20251001',

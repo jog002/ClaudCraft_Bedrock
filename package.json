@@ -4,9 +4,14 @@
   "description": "AI-controlled Minecraft Bedrock bot powered by Claude",
   "main": "dist/index.js",
   "scripts": {
+    "postinstall": "node scripts/patch-raknet.js",
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc && node dist/index.js"
+    "dev": "tsc && node dist/index.js",
+    "dev:server": "node bds/dev-server.js",
+    "dev:local": "tsc && BDS_PORT=19133 node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "repository": {
     "type": "git",
@@ -24,8 +29,12 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "@types/node": "^25.5.0",
+    "bedrock-portal": "^2.0.0",
     "bedrock-protocol": "^3.53.0",
     "dotenv": "^17.3.1",
     "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.0"
   }
 }

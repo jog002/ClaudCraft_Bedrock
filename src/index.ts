@@ -1,80 +1,62 @@
 import * as dotenv from 'dotenv';
 import { loadConfig } from './config';
 import { BotConnection, ChatEvent } from './bot/connection';
+import { WorldState } from './bot/worldState';
 import { LLMClient } from './llm/client';
 import { PromptBuilder } from './llm/promptBuilder';
+import { AgentLoop } from './llm/agentLoop';
+import { MemoryManager } from './memory/memoryManager';
 
 dotenv.config();
-
-// Rate limiting: minimum ms between LLM responses
-const MIN_RESPONSE_INTERVAL = 3000;
-let lastResponseTime = 0;
-let pendingResponse = false;
 
 async function main() {
   console.log('=== ClaudCraft Bedrock Bot ===\n');
 
-  // Validate API key
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error('Error: ANTHROPIC_API_KEY not set in environment or .env file.');
     console.error('Create a .env file with: ANTHROPIC_API_KEY=sk-ant-...');
     process.exit(1);
   }
 
-  // Load config
   const config = loadConfig();
   console.log(`Bot name: ${config.bot.name}`);
   console.log(`LLM model: ${config.llm.chatModel}`);
-  console.log(`Connection: ${config.connection.type === 'realm' ? `Realm "${config.connection.realmName}"` : `${config.connection.host}:${config.connection.port}`}`);
-  console.log(`Offline mode: ${config.connection.offline}\n`);
+  const connDesc = config.connection.type === 'realm'
+    ? `Realm "${config.connection.realmName}"`
+    : config.connection.type === 'friend'
+      ? `Friend's world${config.connection.friendGamertag ? ` (${config.connection.friendGamertag})` : ''}`
+      : `${config.connection.host}:${config.connection.port}`;
+  console.log(`Connection: ${connDesc}`);
+  console.log(`Offline mode: ${config.connection.offline}`);
+  console.log(`Cheats mode: ${config.connection.cheats ? 'enabled (command-based skills)' : 'disabled (packet-based skills)'}\n`);
 
   // Initialize components
-  const llm = new LLMClient(config.llm);
-  const promptBuilder = new PromptBuilder(config.bot);
+  const memoryManager = new MemoryManager(config.bot.memoryPath);
+  memoryManager.load();
+
+  const llm = new LLMClient(config.llm, config.connection.cheats);
+  const promptBuilder = new PromptBuilder(config.bot, config.connection.cheats);
   const connection = new BotConnection(config);
+  const worldState = new WorldState();
+  const agentLoop = new AgentLoop(connection, worldState, llm, promptBuilder, config, memoryManager);
 
-  // Handle chat messages
-  connection.on('chat', async (event: ChatEvent) => {
-    const { username, message } = event;
-
-    // Add to chat history regardless of whether we respond
-    promptBuilder.addMessage(username, message);
-
-    // Check if we should respond
-    if (!promptBuilder.shouldRespond(username, message)) return;
-
-    // Rate limiting
-    const now = Date.now();
-    if (pendingResponse || now - lastResponseTime < MIN_RESPONSE_INTERVAL) {
-      return;
-    }
-
-    pendingResponse = true;
-    try {
-      const systemPrompt = promptBuilder.getSystemPrompt();
-      const chatPrompt = promptBuilder.buildChatPrompt();
-
-      console.log(`[LLM] Generating response to <${username}> ${message}`);
-      const response = await llm.chat(systemPrompt, chatPrompt);
-
-      if (response) {
-        console.log(`[LLM] Response: ${response}`);
-        connection.sendChat(response);
-
-        // Add bot's own message to history
-        promptBuilder.addMessage(config.bot.name, response);
-      }
-
-      lastResponseTime = Date.now();
-    } catch (err: any) {
-      console.error(`[LLM] Error generating response: ${err.message}`);
-    } finally {
-      pendingResponse = false;
+  // Register world state listeners early (before spawn) to catch add_entity packets
+  connection.on('join', () => {
+    const client = connection.getClient();
+    if (client) {
+      worldState.registerListeners(client);
+      console.log('[Bot] World awareness active.');
     }
   });
 
+  // Handle chat messages via agent loop
+  connection.on('chat', (event: ChatEvent) => {
+    agentLoop.onChatEvent(event);
+  });
+
   connection.on('spawn', () => {
-    console.log(`[Bot] ${config.bot.name} is alive and listening for chat!`);
+    console.log(`[Bot] ${config.bot.name} is alive and listening!`);
+    agentLoop.start();
   });
 
   connection.on('error', (err: Error) => {
@@ -83,21 +65,22 @@ async function main() {
 
   connection.on('give_up', () => {
     console.error('[Bot] Could not maintain connection. Exiting.');
+    agentLoop.stop();
+    worldState.cleanup();
     process.exit(1);
   });
 
   // Graceful shutdown
-  process.on('SIGINT', () => {
+  const shutdown = () => {
     console.log('\n[Bot] Shutting down...');
+    agentLoop.stop();
+    memoryManager.shutdown();
+    worldState.cleanup();
     connection.disconnect();
     process.exit(0);
-  });
-
-  process.on('SIGTERM', () => {
-    console.log('\n[Bot] Shutting down...');
-    connection.disconnect();
-    process.exit(0);
-  });
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 
   // Connect!
   try {

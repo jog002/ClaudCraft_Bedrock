@@ -1,21 +1,24 @@
 {
   "bot": {
-    "name": "Andy",
+    "name": "ClaudeCraft",
     "persona": "friendly and curious Minecraft bot who loves exploring and helping out",
     "authCachePath": "./auth_cache",
-    "microsoftEmail": ""
+    "microsoftEmail": "roxyBdBest@gmail.com"
   },
   "connection": {
-    "type": "realm",
+    "type": "server",
+    "friendGamertag": "theAUGinater",
+    "friendMicrosoftEmail": "joscargiller@gmail.com",
     "realmName": "",
-    "host": "localhost",
+    "host": "127.0.0.1",
     "port": 19132,
-    "offline": false
+    "offline": true,
+    "cheats": true
   },
   "llm": {
     "chatModel": "claude-haiku-4-5-20251001",
     "reasoningModel": "claude-sonnet-4-6",
-    "maxTokens": 256,
+    "maxTokens": 512,
     "decisionIntervalMs": 5000
   }
 }
